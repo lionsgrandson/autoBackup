@@ -98,7 +98,7 @@ class CoreTests(unittest.TestCase):
         changed = {}
         def fake_execute(args, env, callback=None, timeout=None):
             calls.append(args)
-            return core.Result(0, "")
+            return core.Result(0, '{ "message_type": "summary", "snapshot_id": "' + "f"*64 + '" }\n' if args[0] == "backup" else "")
         with patch.object(core, "get_secrets", return_value={}), \
              patch.object(core, "environment", return_value={}), \
              patch.object(core, "source_paths", return_value=["test"]), \
@@ -108,8 +108,8 @@ class CoreTests(unittest.TestCase):
              patch.object(core, "save_config", side_effect=lambda c: changed.update(c)), \
              patch.object(core, "log"):
             self.assertEqual(core.run_backup(config()), "success")
-        self.assertEqual([call[0] for call in calls], ["backup", "check", "forget"])
-        self.assertEqual(calls[-1], ["forget", "--keep-last", "2", "--group-by", "", "--prune"])
+        self.assertEqual([call[0] for call in calls], ["backup", "check", "tag", "forget"])
+        self.assertEqual(calls[-1], ["forget", "--tag", "autobackup-complete", "--keep-last", "2", "--group-by", "", "--prune"])
         self.assertTrue(changed["last_success"])
 
     def test_no_new_backup_when_not_due(self):
