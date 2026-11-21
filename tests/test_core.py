@@ -82,7 +82,7 @@ class CoreTests(unittest.TestCase):
         calls = []
         def fake_execute(args, env, callback=None, timeout=None):
             calls.append(args[0])
-            return core.Result(2 if args[0] == "check" else 0, "error")
+            return core.Result(2 if args[0] == "check" else 0, '{ "message_type": "summary", "snapshot_id": "' + "f"*64 + '" }\n' if args[0] == "backup" else "error")
         with patch.object(core, "get_secrets", return_value={}), \
              patch.object(core, "environment", return_value={}), \
              patch.object(core, "source_paths", return_value=["test"]), \
