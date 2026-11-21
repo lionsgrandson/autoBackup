@@ -64,10 +64,10 @@ JSON omits all passwords and secrets and is not sufficient by itself.
 
 - restic provides encryption, compression and content deduplication.
 - **Only after a successful upload and repository metadata check**,
-  the app keeps the most recent two snapshots in the dedicated repository.
-- Retention uses restic 'forget --keep-last 2 --group-by "" --prune'.
+  the app tags a verified snapshot as complete and keeps the most recent two complete snapshots in the dedicated repository.
+- Retention uses restic 'forget --tag autobackup-complete --keep-last 2 --group-by "" --prune'.
 - Backup failure or a metadata check failure prevents pruning.
-- Failed restic operations can leave incomplete snapshots; investigate
+- Failed restic operations can leave incomplete, untagged-as-complete snapshots; these are not included in the two-version rotation and must be cleaned up manually after inspection. Investigate
   failures and storage usage before relying on a backup.
 - Restore targets a **new/empty directory**; it does not silently overwrite
   files on the current computer.
