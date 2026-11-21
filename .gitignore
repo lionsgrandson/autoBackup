@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.venv/
+build/
+dist/
+output/
+*.spec
+restic.exe
+restic_unpacked/
+*.zip
+.env
+*.log
