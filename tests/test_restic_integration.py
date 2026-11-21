@@ -26,10 +26,13 @@ class ResticIntegrationTest(unittest.TestCase):
             run("init")
             for n in range(3):
                 (source / "test.txt").write_text(f"content version {n}", encoding="utf-8")
-                run("backup", str(source))
+                output = run("backup", "--json", "--tag", "autobackup-attempt", str(source))
+                summary = [json.loads(line) for line in output.splitlines() if line.startswith("{") and '"message_type":"summary"' in line.replace(" ", "")]
+                self.assertTrue(summary)
+                run("tag", "--set", "autobackup-complete", summary[-1]["snapshot_id"])
             run("check")
-            run("forget", "--keep-last", "2", "--group-by", "", "--prune")
-            snapshots = json.loads(run("snapshots", "--json"))
+            run("forget", "--tag", "autobackup-complete", "--keep-last", "2", "--group-by", "", "--prune")
+            snapshots = json.loads(run("snapshots", "--json", "--tag", "autobackup-complete"))
             self.assertEqual(len(snapshots), 2)
             restore_dir = root / "restored"
             run("restore", "latest", "--target", str(restore_dir))
