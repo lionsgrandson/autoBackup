@@ -4,7 +4,7 @@ import json
 import secrets
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QThread, Qt, QTime, Signal, Slot
+from PySide6.QtCore import QObject, QThread, Qt, QTime, QTimer, Signal, Slot
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout,
@@ -48,6 +48,7 @@ class MainWindow(QMainWindow):
         self.thread = None
         self.job = None
         self.snapshots = []
+        self._refresh_after_job = False
         self.widgets = {}
         self.build()
         self.apply_language()
@@ -150,6 +151,8 @@ class MainWindow(QMainWindow):
         ]:
             form.addRow(self.label(key), widget)
         conn.addLayout(form)
+        for field in (self.account, self.endpoint, self.bucket, self.profile, self.access, self.secret, self.password):
+            field.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
         hint = self.label("keys_hint")
         hint.setStyleSheet("color: #60758d;")
         conn.addWidget(hint)
@@ -325,6 +328,9 @@ class MainWindow(QMainWindow):
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
         self.update_last()
+        if self._refresh_after_job:
+            self._refresh_after_job = False
+            QTimer.singleShot(0, self.refresh_snapshots)
 
     def job_error(self, message):
         self.status_label.setText(message[:450])
@@ -384,12 +390,16 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self.job_error(str(exc))
             return
-        self.job_start(lambda progress: core.run_backup(config, callback=progress),
+        self.job_start(lambda progress: self._save_then_backup(config, progress),
                        self.backup_done)
+
+    def _save_then_backup(self, config, progress):
+        core.save_config(config)
+        return core.run_backup(config, callback=progress)
 
     def backup_done(self, result):
         self.status_label.setText(self.t("success"))
-        self.refresh_snapshots()
+        self._refresh_after_job = True
 
     def refresh_snapshots(self):
         try:
