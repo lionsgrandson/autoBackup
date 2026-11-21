@@ -105,6 +105,8 @@ def sign_in(config: dict, username: str, password: str) -> dict:
         raise AuthError("This account is not enabled for AutoBackup.")
     if config.get("user_id") != user_id:
         device_id = str(uuid.uuid4())
+        config["last_success"] = None
+        config["last_result"] = ""
     else:
         device_id = config.get("device_id") or str(uuid.uuid4())
     device_name = (os.getenv("COMPUTERNAME") or "Windows computer")[:80]

@@ -282,6 +282,7 @@ class MainWindow(QMainWindow):
         try:
             self.config = auth.sign_out(core.load_config())
             core.save_config(self.config)
+            scheduler.remove_schedule()
         except Exception as exc:
             self.job_error(str(exc))
             return

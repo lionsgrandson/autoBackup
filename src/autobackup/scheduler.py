@@ -35,6 +35,16 @@ def install_schedule(hour: str) -> None:
                    capture_output=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
 
 
+def remove_schedule() -> None:
+    """Remove the scheduled task when the current Windows user signs out."""
+    if os.name != "nt":
+        return
+    subprocess.run(["schtasks", "/Delete", "/F", "/TN", TASK_NAME],
+                   capture_output=True, text=True,
+                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+
+
 def scheduled_main() -> int:
     from .core import load_config, run_backup, log
     try:
