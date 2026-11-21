@@ -269,7 +269,7 @@ def _snapshot_count(env: dict) -> int:
 
 def list_snapshots(config: dict) -> list[dict]:
     env = environment(config, get_secrets(config))
-    result = execute(["snapshots", "--json"], env, timeout=180)
+    result = execute(["snapshots", "--json", "--tag", "autobackup-complete"], env, timeout=180)
     require_success(result, "Reading snapshots")
     try:
         data = json.loads(result.output or "[]")
@@ -288,9 +288,9 @@ def run_backup(config: dict, callback=None, only_if_due: bool = False) -> str:
         env = environment(config, get_secrets(config))
         paths = source_paths(config)
         personalization = export_personalization()
-        if personalization is not None:
+        if personalization is not None and not any(Path(p) in personalization.parents or Path(p) == personalization for p in paths):
             paths.append(str(personalization))
-        args = ["backup", "--json", "--exclude", str(APP_DIR / "cache"),
+        args = ["backup", "--json", "--tag", "autobackup-attempt", "--exclude", str(APP_DIR / "cache"),
                 "--exclude", str(APP_DIR / "events.log"), "--exclude-caches"]
         if config.get("vss"):
             args.append("--use-fs-snapshot")
@@ -299,15 +299,28 @@ def run_backup(config: dict, callback=None, only_if_due: bool = False) -> str:
             callback("Backing up encrypted files...")
         backup = execute(args, env, callback=callback)
         require_success(backup, "Backup (incomplete backups never trigger deletion)")
+        snapshot_id = None
+        for line in reversed(backup.output.splitlines()):
+            try:
+                event = json.loads(line)
+                if event.get("message_type") == "summary":
+                    snapshot_id = event.get("snapshot_id")
+                    break
+            except (ValueError, AttributeError):
+                continue
+        if not snapshot_id or not re.fullmatch(r"[a-fA-F0-9]{8,64}", snapshot_id):
+            raise BackupError("Backup finished without a confirmed snapshot ID; old versions kept.")
         if callback:
             callback("Checking repository metadata...")
         check = execute(["check"], env, timeout=14400)
         require_success(check, "Repository check; older snapshots preserved")
+        tag_result = execute(["tag", "--set", "autobackup-complete", snapshot_id], env)
+        require_success(tag_result, "Marking snapshot as complete; older snapshots preserved")
         # The repository is dedicated to one device/profile, so disable default
         # grouping by source paths to always enforce exactly two snapshots.
         if callback:
             callback("Retaining the two newest snapshots...")
-        retention = execute(["forget", "--keep-last", "2", "--group-by", "", "--prune"], env)
+        retention = execute(["forget", "--tag", "autobackup-complete", "--keep-last", "2", "--group-by", "", "--prune"], env)
         if retention.code != 0:
             log("Backup uploaded; cleanup FAILED. No further snapshot removal attempted.")
             raise BackupError("Backup was uploaded, but cleanup failed; older copies remain. " +
