@@ -1,125 +1,122 @@
-# AutoBackup — Windows desktop backup to Cloudflare R2
+# AutoBackup — centrally managed Cloudflare R2 backups
 
-A bilingual (Hebrew/English) **Windows 10/11 x64 desktop app** for encrypted
-file-level backups directly to **Cloudflare R2 Standard storage**. No Cloudflare
-Worker, hosted server, Node.js, Python, or developer tools are needed on a
-computer running the **built installer**.
+Windows desktop app with Hebrew RTL and English UI. Admin configures **one R2
+bucket**, creates usernames and passwords, and distributes a configured Windows
+installer. Users **only sign in**. No Cloudflare Worker or GitHub Actions.
 
-## What is and is not backed up
+## Architecture
 
-The default selection is the **entire current Windows user profile**, including
-Desktop, Documents, Downloads, Pictures, Videos, Music, AppData, and Windows
-theme files accessible to that account. You may add other folders and drives.
-The app also exports selected HKCU Windows wallpaper/desktop/theme registry
-entries. File access failures cause the job to fail rather than silently
-declaring the computer fully backed up.
+- Supabase Auth manages accounts (admin-created, no public self-signup).
+- A Supabase Edge Function checks authenticated user and admin-controlled
+  app_metadata, then requests temporary R2 credentials **restricted to the
+  signed-in user's device path**.
+- restic on Windows encrypts and uploads files **directly to R2**.
+- Each device repository path is users/USER_UUID/devices/DEVICE_UUID.
+- Default backup selection is the whole Windows user folder. Other folders
+  can be added. A daily Task Scheduler trigger checks 30-day interval.
+- Retain the last **two complete** encrypted/deduplicated backup snapshots.
+- Users can restore old snapshots from their own devices to empty folders.
+- Windows Credential Manager holds the rotating Supabase refresh token.
 
-**This is not a bootable disk image** and does not fully restore Windows,
-drivers, installed applications, all registry hives, locked files, BitLocker
-keys, credential stores, or the state of every running app. Windows VSS is
-optional and needs elevated privileges. Cloud-only placeholder files must
-be downloaded locally before they can reliably be included.
+## One-time setup: Cloudflare R2 (administrator)
 
-For full bare-metal recovery, keep an additional Windows-compatible system
-image and a separate offline copy of critical data.
+Create an R2 Standard bucket and parent R2 API token with Object Read & Write,
+restricted to that bucket, that may issue temporary credentials. Record:
 
-## Setup (non-developer PC)
+1. Cloudflare Account ID (32 hexadecimal characters).
+2. R2 bucket name and jurisdiction (global or EU).
+3. Parent R2 API **Bearer Token** (server-side SECRET).
+4. Parent R2 **Access Key ID** (server-side).
 
-1. In Cloudflare R2, create a **Standard** bucket (e.g. personal-pc-backups).
-2. Create an **R2 API token** with **Object Read & Write**, restricted to that
-   bucket. Obtain the **Access Key ID** and **Secret Access Key**. Do not use
-   your Cloudflare account login password.
-3. Download **AutoBackup-Windows-Installer** from
-   https://github.com/lionsgrandson/autoBackup/actions/workflows/windows-installer.yml
-   after a successful Windows installer workflow, unzip the artifact and run
-   **AutoBackup-Setup-Windows-x64.exe**. The installer bundles restic.
-4. Start AutoBackup and select **עברית** or **English**. Enter Cloudflare
-   Account ID (32 characters), bucket, unique backup name (e.g. my-laptop),
-   R2 access keys, and a **separate encryption password** of at least
-   12 characters. For EU buckets use the optional endpoint field:
-   https://ACCOUNT_ID.eu.r2.cloudflarestorage.com
-5. Save the recovery password **outside the computer** (e.g. password manager).
-   Cloudflare cannot recover it. Click Connect / sign in.
-6. Check folders, set time, click **Save settings and schedule**, then click
-   **Back up now** for the first copy. Keep the desktop app open while a
-   manually started backup is running. Windows Task Scheduler performs a daily
-   due check. You may close the desktop app.
-7. Test recovery: Show available backups, select a snapshot, restore into a
-   **new empty folder**, and check restored files.
+No permanent R2 token/key is ever installed on customer computers.
 
-R2 keys and the backup password are stored through Windows Credential Manager
-(via Python keyring), **not** in source code or the settings JSON.
-Scheduled tasks run under the same Windows user account; **the PC must be on
-and that Windows user logged in**. Missed tasks are configured to run when
-available on a best-effort basis. Running while logged out or waking a sleeping
-computer reliably requires more Windows service infrastructure.
+## One-time setup: Supabase (administrator)
 
-### Recovering on another computer
+Create or select your Supabase project and **disable public/self sign-up**
+under Authentication settings. Enable appropriate Auth login rate limits.
+Run supabase/migrations/20261121000000_autobackup_devices.sql in SQL Editor.
+The devices table enables RLS and grants **no user-facing table access**.
 
-Install the app on the replacement PC. Enter the **same Account ID, bucket,
-backup name, R2 access keys, and encryption password**. Connect, list
-snapshots and restore into an empty folder. The exported connection details
-JSON omits all passwords and secrets and is not sufficient by itself.
+Configure these secrets on the Supabase Edge Function:
 
-## Retention and safety
+    CF_ACCOUNT_ID=<Cloudflare Account ID>
+    CF_R2_BUCKET=<R2 bucket name>
+    CF_R2_API_TOKEN=<parent R2 API bearer token - SECRET>
+    CF_R2_PARENT_ACCESS_KEY_ID=<parent access key ID>
+    CF_R2_REGION=global
+    RESTIC_MASTER_KEY=<random high-entropy secret, at least 40 characters>
+    R2_TTL_SECONDS=172800
 
-- restic provides encryption, compression and content deduplication.
-- **Only after a successful upload and repository metadata check**,
-  the app tags a verified snapshot as complete and keeps the most recent two complete snapshots in the dedicated repository.
-- Retention uses restic 'forget --tag autobackup-complete --keep-last 2 --group-by "" --prune'.
-- Backup failure or a metadata check failure prevents pruning.
-- Failed restic operations can leave incomplete, untagged-as-complete snapshots; these are not included in the two-version rotation and must be cleaned up manually after inspection. Investigate
-  failures and storage usage before relying on a backup.
-- Restore targets a **new/empty directory**; it does not silently overwrite
-  files on the current computer.
-- Keys need R2 delete rights for retention; anyone gaining the Windows
-  user's credentials might be able to delete backups. Use an additional
-  immutable or offline copy for ransomware resilience.
-- Network interruption, file permissions, file locks, unavailable drives,
-  and cloud quota can prevent successful backup.
+Use CF_R2_REGION=eu for an EU jurisdiction bucket. The broker also requires
+SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY, normally automatically supplied
+to hosted Supabase functions. Check they are present and keep them secret.
 
-## Cloudflare R2 Standard cost (approximate)
+From a linked Supabase CLI project run:
 
-Official pricing as of November 2026: **$0.015 per GB-month** with the first
-10 GB-month free, plus request charges and no egress bandwidth fee.
-A constant 500 GB is approximately **$7.35/month**; 1,000 GB is
-**$14.85/month**. If both retained copies are completely different,
-two 500 GB copies cost **$14.85/month** and two 1 TB copies **$29.85/month**.
-Deduplication/compression can lower stored bytes. Bills are based on daily
-peak storage and operations: https://developers.cloudflare.com/r2/pricing/
+    supabase functions deploy r2-broker
 
-## Development (Windows)
+Keep JWT verification enabled. Never ship service role or master key to users.
 
-Requires Python 3.12+.
+## Create your users
 
-    py -m venv .venv
-    .venv\Scripts\activate
-    pip install -r requirements.txt
-    python -m unittest discover -s tests -v
-    python main.py
+On your admin computer set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in your
+private environment. Run:
 
-For development install restic independently and add it to PATH or set
-AUTOBACKUP_RESTIC. Production installers include the pinned, SHA-256-verified
-restic 0.20.0 Windows binary. The GitHub Actions workflow builds the native
-PyInstaller application and an Inno Setup per-user installer, and runs
-unit tests and a local encrypted backup/restore test.
+    python scripts/admin-users.py create customer1
 
-Remote R2 connection must still be tested against a bucket owned by the user:
-the CI workflow does **not** have R2 credentials.
+The script prompts for password and prints user UUID. Give the credentials
+to the user. To manage accounts:
 
-## Files and tasks
+    python scripts/admin-users.py disable USER_UUID
+    python scripts/admin-users.py enable USER_UUID
+    python scripts/admin-users.py reset-password USER_UUID
 
-- Local settings/logs: %LOCALAPPDATA%\AutoBackup
-- Saved keys and encryption password: Windows Credential Manager (current user)
-- Storage location: s3:https://ACCOUNT.r2.cloudflarestorage.com/BUCKET/autobackup/PROFILE
-- Task Scheduler name: CodeCrafter AutoBackup - 30 day check
-- Uninstalling the app does **not** remove the remote backups or R2 bucket.
+Under the hood the username is mapped to a Supabase Auth alias such as
+customer1@users.autobackup.example.com. Users never see that email.
+There is no self-registration or email-based recovery in this MVP.
 
-## Known MVP limitations
+## Build the Windows installer LOCALLY (developer computer only)
 
-- Windows x64 only; no macOS or Linux installer.
-- R2 API keys are used for sign-in, not Cloudflare OAuth or a multiuser
-  account service.
-- File-level backup, not a full Windows bootable image or bare-metal restore.
-- Windows scheduling and actual R2 integration must be validated on a
-  real non-developer Windows PC before this is the only backup.
+Copy config/client.example.json to config/client.json and set ONLY your
+Supabase Project URL and **public** publishable/anon key. This is intentionally
+ignored by Git. Do NOT put Cloudflare parent token, service role or master
+key in it.
+
+On your Windows developer PC install Python 3.12 and Inno Setup 6. Run:
+
+    .\scripts\build-windows.ps1
+
+The output is output/AutoBackup-Setup-Windows-x64.exe.
+It bundles the desktop application and restic. Recipient computers need no
+Python, Node.js, GitHub runner or developer tools.
+
+Users install, enter username/password, configure backup folders and time,
+then run the first backup. Verify a restore to an empty folder. After that,
+the daily Windows scheduled task runs backups when due.
+
+## Critical limitations
+
+- This protects accessible **files**, including AppData and some Windows
+  theme registry data. It does **NOT** restore Windows OS, drivers,
+  installed applications, every locked file, or create a bootable disk image.
+- Scheduled operation requires the Windows user logged in and PC powered on.
+- First backups that exceed the temporary credential TTL (default 48 hours)
+  can fail; adjust R2_TTL_SECONDS up to Cloudflare's 7-day maximum.
+  Revoking a user prevents new credentials but old temporary credentials
+  persist until expiry unless the parent token is revoked.
+- The backend **can derive each device's restic encryption password** via a
+  master key. It encrypts data before upload but is not zero-knowledge.
+  Losing/changing RESTIC_MASTER_KEY without migration means previously stored
+  backups cannot be decrypted.
+- A user's credentials grant read/write/delete for that user's own device
+  prefix. Preserve an independent immutable/offline backup for ransomware.
+- No per-user quota or billing enforcement; monitor the bucket for abuse.
+- This version is not yet tested against the administrator's live R2
+  account or a real configured Supabase project. Validate real upload,
+  restore, locked files, Windows scheduling and expired tokens.
+- Previously built GitHub Actions installers are version 0.1 (direct R2
+  connection) and DO NOT contain this centrally managed sign-in; rebuild
+  the new version locally.
+
+R2 Temporary Credentials: https://developers.cloudflare.com/r2/api/s3/temporary-credentials/
+R2 Pricing: https://developers.cloudflare.com/r2/pricing/

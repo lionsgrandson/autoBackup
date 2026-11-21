@@ -10,3 +10,5 @@ restic_unpacked/
 *.zip
 .env
 *.log
+config/client.json
+supabase/functions/.env

@@ -11,7 +11,6 @@ import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import urlparse
 
 APP_DIR = Path(os.getenv("LOCALAPPDATA") or (Path.home() / ".local" / "share")) / "AutoBackup"
 CONFIG_FILE = APP_DIR / "config.json"
@@ -27,8 +26,8 @@ class BackupError(Exception):
 
 def default_config() -> dict:
     return {
-        "language": "he", "account_id": "", "endpoint": "", "bucket": "",
-        "profile": "", "sources": [str(Path.home())], "time": DEFAULT_HOUR,
+        "language": "he", "username": "", "user_id": "", "device_id": "",
+        "sources": [str(Path.home())], "time": DEFAULT_HOUR,
         "interval_days": 30, "last_success": None, "last_result": "",
         "vss": False,
     }
@@ -70,58 +69,12 @@ def is_due(last_success: str | None, now: datetime | None = None, days: int = 30
 
 
 def validate(config: dict) -> None:
-    if not re.fullmatch(r"[0-9a-fA-F]{32}", config.get("account_id", "")):
-        raise BackupError("Cloudflare Account ID must contain 32 hexadecimal characters.")
-    if not re.fullmatch(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]", config.get("bucket", "")):
-        raise BackupError("Invalid R2 bucket name.")
-    if not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{1,46}[a-z0-9])?", config.get("profile", "")):
-        raise BackupError("Use 3-48 lowercase letters, digits or hyphens for backup name.")
     if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", config.get("time", "")):
         raise BackupError("Invalid backup time.")
-    endpoint = config.get("endpoint", "").strip() or (
-        f"https://{config['account_id'].lower()}.r2.cloudflarestorage.com"
-    )
-    parsed = urlparse(endpoint)
-    host = (parsed.hostname or "").lower()
-    account_id = config["account_id"].lower()
-    approved = {
-        f"{account_id}.r2.cloudflarestorage.com",
-        f"{account_id}.eu.r2.cloudflarestorage.com",
-    }
-    if parsed.scheme != "https" or host not in approved or parsed.port or parsed.path not in ("", "/") or parsed.query or parsed.fragment or parsed.username:
-        raise BackupError("R2 endpoint must use your Cloudflare account's global or EU HTTPS hostname.")
     if not isinstance(config.get("sources"), list) or not config["sources"]:
-        raise BackupError("Select at least one folder or drive.")
-    for source in config["sources"]:
-        if not isinstance(source, str) or not source.strip():
-            raise BackupError("Invalid source folder.")
-
-
-def repo_url(config: dict) -> str:
-    validate(config)
-    endpoint = config.get("endpoint", "").strip().rstrip("/") or (
-        f"https://{config['account_id'].lower()}.r2.cloudflarestorage.com"
-    )
-    return f"s3:{endpoint}/{config['bucket']}/autobackup/{config['profile']}"
-
-
-def credential_key(config: dict) -> str:
-    return f"{config['account_id'].lower()}/{config['bucket']}/{config['profile']}"
-
-
-def store_secrets(config: dict, access_id: str, access_secret: str, password: str) -> None:
-    import keyring
-    keyring.set_password(SERVICE, credential_key(config), json.dumps({
-        "access_id": access_id, "access_secret": access_secret, "password": password,
-    }))
-
-
-def get_secrets(config: dict) -> dict:
-    import keyring
-    raw = keyring.get_password(SERVICE, credential_key(config))
-    if not raw:
-        raise BackupError("Connect to your R2 backup first. Saved credentials not found.")
-    return json.loads(raw)
+        raise BackupError("Select at least one source directory.")
+    if not config.get("user_id") or not config.get("device_id"):
+        raise BackupError("Sign in before running backups.")
 
 
 def restic_binary() -> str:
@@ -138,13 +91,14 @@ def restic_binary() -> str:
     raise BackupError("restic.exe is missing. Install the built Windows installer or add restic to PATH.")
 
 
-def environment(config: dict, secrets: dict) -> dict:
+def environment(grant: dict) -> dict:
     return {
         **os.environ,
-        "RESTIC_REPOSITORY": repo_url(config),
-        "RESTIC_PASSWORD": secrets["password"],
-        "AWS_ACCESS_KEY_ID": secrets["access_id"],
-        "AWS_SECRET_ACCESS_KEY": secrets["access_secret"],
+        "RESTIC_REPOSITORY": grant["repository"],
+        "RESTIC_PASSWORD": grant["password"],
+        "AWS_ACCESS_KEY_ID": grant["access_key_id"],
+        "AWS_SECRET_ACCESS_KEY": grant["secret_access_key"],
+        "AWS_SESSION_TOKEN": grant["session_token"],
         "AWS_DEFAULT_REGION": "auto",
         "AWS_REGION": "auto",
         "RESTIC_CACHE_DIR": str(APP_DIR / "cache"),
@@ -204,29 +158,17 @@ def require_success(result: Result, operation: str) -> None:
         raise BackupError(f"{operation} failed (exit {result.code}).\n{message[:1300]}")
 
 
-def connect(config: dict, access_id: str, access_secret: str, password: str) -> None:
-    validate(config)
-    if not (access_id.strip() and access_secret.strip() and len(password) >= 12):
-        raise BackupError("Provide R2 keys and an encryption password (at least 12 characters).")
-    secrets = {
-        "access_id": access_id.strip(), "access_secret": access_secret.strip(),
-        "password": password,
-    }
-    env = environment(config, secrets)
-    check = execute(["snapshots", "--json"], env, timeout=120)
-    if check.code != 0:
-        # Restic init refuses to overwrite an existing repository.
-        create = execute(["init"], env, timeout=180)
-        if create.code != 0:
-            raise BackupError(
-                "Could not open or initialize the backup. Check bucket access, endpoint, "
-                "backup name and recovery password. If restoring an existing repository, "
-                "use the original password. Details:\n" +
-                "\n".join(create.output.strip().splitlines()[-5:])[:900]
-            )
-    store_secrets(config, access_id.strip(), access_secret.strip(), password)
-    save_config(config)
-    log("R2 connection configured successfully.")
+def ensure_repository(env: dict) -> None:
+    """Create a repository only if no repository currently exists."""
+    result = execute(["snapshots", "--json"], env, timeout=120)
+    if result.code == 0:
+        return
+    created = execute(["init"], env, timeout=180)
+    if created.code != 0:
+        raise BackupError(
+            "Unable to open or initialize encrypted repository. "
+            "Check your connection and administrator's R2 permissions."
+        )
 
 
 def export_personalization() -> Path | None:
@@ -267,8 +209,9 @@ def _snapshot_count(env: dict) -> int:
     return len(data)
 
 
-def list_snapshots(config: dict) -> list[dict]:
-    env = environment(config, get_secrets(config))
+def list_snapshots(config: dict, device_id: str | None = None) -> list[dict]:
+    from .auth import grant
+    env = environment(grant(config, device_id))
     result = execute(["snapshots", "--json", "--tag", "autobackup-complete"], env, timeout=180)
     require_success(result, "Reading snapshots")
     try:
@@ -285,7 +228,10 @@ def run_backup(config: dict, callback=None, only_if_due: bool = False) -> str:
     if not _BACKUP_LOCK.acquire(blocking=False):
         raise BackupError("A backup is already running in this process.")
     try:
-        env = environment(config, get_secrets(config))
+        from .auth import grant
+        validate(config)
+        env = environment(grant(config))
+        ensure_repository(env)
         paths = source_paths(config)
         personalization = export_personalization()
         if personalization is not None and not any(Path(p) in personalization.parents or Path(p) == personalization for p in paths):
@@ -338,14 +284,16 @@ def run_backup(config: dict, callback=None, only_if_due: bool = False) -> str:
         _BACKUP_LOCK.release()
 
 
-def restore(config: dict, snapshot_id: str, destination: str, callback=None) -> None:
+def restore(config: dict, snapshot_id: str, destination: str, callback=None,
+            device_id: str | None = None) -> None:
     if not re.fullmatch(r"[a-fA-F0-9]{8,64}", snapshot_id):
         raise BackupError("Invalid snapshot identifier.")
     target = Path(destination).expanduser().resolve()
     if target.exists() and any(target.iterdir()):
         raise BackupError("Restore to a new or empty folder to protect existing files.")
     target.mkdir(parents=True, exist_ok=True)
-    env = environment(config, get_secrets(config))
+    from .auth import grant
+    env = environment(grant(config, device_id))
     if callback:
         callback("Restoring files to separate folder...")
     result = execute(["restore", snapshot_id, "--target", str(target)], env, callback=callback)
