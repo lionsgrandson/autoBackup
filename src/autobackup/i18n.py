@@ -29,6 +29,7 @@ TEXT = {
     "schedule_error": "Connection saved, but the Windows schedule could not be created:",
     "copy": "Copy recovery password", "copied": "Password copied. Store it in a safe place outside this computer.",
     "no_pass": "No password currently visible to copy.",
+    "busy_close": "A backup or other operation is still running. Keep the app open until it finishes.",
 },
 "he": {
     "app": "AutoBackup", "subtitle": "גיבוי מוצפן של המחשב ל-Cloudflare R2",
@@ -59,5 +60,6 @@ TEXT = {
     "schedule_error": "החיבור נשמר, אך יצירת התזמון נכשלה:",
     "copy": "העתקת סיסמת השחזור", "copied": "הסיסמה הועתקה. יש לשמור אותה במקום בטוח מחוץ למחשב.",
     "no_pass": "אין כרגע סיסמה גלויה להעתקה.",
+    "busy_close": "הגיבוי או פעולה אחרת עדיין מתבצעים. יש להשאיר את האפליקציה פתוחה עד לסיום.",
 },
 }

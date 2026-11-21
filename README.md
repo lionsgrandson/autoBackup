@@ -41,7 +41,8 @@ image and a separate offline copy of critical data.
 5. Save the recovery password **outside the computer** (e.g. password manager).
    Cloudflare cannot recover it. Click Connect / sign in.
 6. Check folders, set time, click **Save settings and schedule**, then click
-   **Back up now** for the first copy. Windows Task Scheduler performs a daily
+   **Back up now** for the first copy. Keep the desktop app open while a
+   manually started backup is running. Windows Task Scheduler performs a daily
    due check. You may close the desktop app.
 7. Test recovery: Show available backups, select a snapshot, restore into a
    **new empty folder**, and check restored files.

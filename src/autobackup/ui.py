@@ -447,6 +447,13 @@ class MainWindow(QMainWindow):
             Path(path).write_text(json.dumps(safe, indent=2), encoding="utf-8")
             QMessageBox.information(self, self.t("info"), self.t("export_done"))
 
+    def closeEvent(self, event):
+        if self.busy:
+            QMessageBox.warning(self, self.t("notice"), self.t("busy_close"))
+            event.ignore()
+            return
+        super().closeEvent(event)
+
     def update_last(self):
         try:
             stamp = core.load_config().get("last_success")
